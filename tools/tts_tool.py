@@ -2,18 +2,21 @@
 """
 Text-to-Speech Tool Module
 
-Supports seven TTS providers:
+Supports ten TTS providers:
 - Edge TTS (default, free, no API key): Microsoft Edge neural voices
 - ElevenLabs (premium): High-quality voices, needs ELEVENLABS_API_KEY
 - OpenAI TTS: Good quality, needs OPENAI_API_KEY
 - MiniMax TTS: High-quality with voice cloning, needs MINIMAX_API_KEY
 - Mistral (Voxtral TTS): Multilingual, native Opus, needs MISTRAL_API_KEY
+- xAI TTS: Hosted TTS API, needs XAI_API_KEY
 - Google Gemini TTS: Controllable, 30 prebuilt voices, needs GEMINI_API_KEY
+- Qwen3 TTS (self-hosted): OpenAI-compatible speech API via QWEN3_TTS_HOST/tts.qwen3.host
 - NeuTTS (local, free, no API key): On-device TTS via neutts_cli, needs neutts installed
+- KittenTTS (local, lightweight): On-device ONNX TTS via kittentts
 
 Output formats:
-- Opus (.ogg) for Telegram voice bubbles (requires ffmpeg for Edge TTS)
-- MP3 (.mp3) for everything else (CLI, Discord, WhatsApp)
+- Opus (.ogg) for Telegram/Discord voice messages (native for OpenAI/ElevenLabs/Mistral/Gemini/Qwen3; ffmpeg fallback for Edge/MiniMax/xAI/NeuTTS/KittenTTS)
+- MP3 (.mp3) for everything else (CLI, WhatsApp)
 
 Configuration is loaded from ~/.hermes/config.yaml under the 'tts:' key.
 The user chooses the provider and voice; the model just sends text.
@@ -115,6 +118,9 @@ DEFAULT_GEMINI_TTS_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
 GEMINI_TTS_SAMPLE_RATE = 24000
 GEMINI_TTS_CHANNELS = 1
 GEMINI_TTS_SAMPLE_WIDTH = 2  # 16-bit PCM (L16)
+DEFAULT_QWEN3_MODEL = "qwen3-tts-base"
+DEFAULT_QWEN3_VOICE = "ono_anna"
+DEFAULT_QWEN3_HOST = ""
 
 def _get_default_output_dir() -> str:
     from hermes_constants import get_hermes_dir
@@ -136,6 +142,7 @@ PROVIDER_MAX_TEXT_LENGTH: Dict[str, int] = {
     "minimax": 10000,     # https://platform.minimax.io/docs/api-reference/speech-t2a-http (sync)
     "mistral": 4000,      # conservative; no published per-request cap
     "gemini": 5000,       # Gemini TTS caps at ~8k input tokens / ~655s audio
+    "qwen3": 4000,        # conservative fallback for self-hosted OpenAI-compatible speech APIs
     "elevenlabs": 10000,  # fallback when model-aware lookup can't resolve (multilingual_v2)
     "neutts": 2000,       # local model, quality falls off on long text
     "kittentts": 2000,    # local 25MB model
@@ -457,6 +464,131 @@ def _generate_xai_tts(text: str, output_path: str, tts_config: Dict[str, Any]) -
         f.write(response.content)
 
     return output_path
+
+
+# Provider: Qwen3 TTS (self-hosted)
+# ===========================================================================
+def _normalize_qwen3_tts_base_url(value: str) -> str:
+    """Normalize a Qwen3 TTS host/base URL to an OpenAI-compatible /v1 base URL."""
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    if "://" not in raw:
+        raw = f"http://{raw}"
+    raw = raw.rstrip("/")
+    for suffix in ("/audio/speech/clone", "/audio/speech"):
+        if raw.endswith(suffix):
+            raw = raw[: -len(suffix)].rstrip("/")
+    if not raw.endswith("/v1"):
+        raw = f"{raw}/v1"
+    return raw
+
+
+def _resolve_qwen3_base_url(tts_config: Dict[str, Any]) -> str:
+    """Resolve Qwen3 TTS base URL from config/env with a sane fallback."""
+    qwen_config = tts_config.get("qwen3", {}) if isinstance(tts_config.get("qwen3"), dict) else {}
+    configured = (
+        qwen_config.get("base_url")
+        or qwen_config.get("baseUrl")
+        or qwen_config.get("host")
+        or os.getenv("QWEN3_TTS_BASE_URL", "")
+        or os.getenv("QWEN3_TTS_HOST", "")
+        or DEFAULT_QWEN3_HOST
+    )
+    return _normalize_qwen3_tts_base_url(str(configured or ""))
+
+
+def _resolve_qwen3_host(tts_config: Dict[str, Any]) -> str:
+    """Backward-compatible alias for older tests/imports; returns a /v1 base URL."""
+    return _resolve_qwen3_base_url(tts_config)
+
+
+def _generate_qwen3_tts(text: str, output_path: str, tts_config: Dict[str, Any]) -> str:
+    """
+    Generate audio using a self-hosted Qwen3 TTS service.
+
+    Uses an OpenAI-compatible speech endpoint exposed by the self-hosted
+    Qwen3 TTS stack. If the requested voice is unavailable, it falls back
+    to ``ono_anna``.
+    """
+    import urllib.error
+    import urllib.request
+
+    qwen_config = tts_config.get("qwen3", {})
+    voice = qwen_config.get("voice", DEFAULT_QWEN3_VOICE)
+    speed = qwen_config.get("speed", 1.0)
+    language = qwen_config.get("language", "English")
+    instructions = qwen_config.get("instructions", "")
+    model = qwen_config.get("model", DEFAULT_QWEN3_MODEL)
+    base_url = _resolve_qwen3_base_url(tts_config)
+    endpoint = "/audio/speech/clone" if voice.endswith("_clone") or voice in {"sophie", "ryan_clone"} else "/audio/speech"
+
+    if output_path.endswith(".ogg"):
+        response_format = "opus"
+    elif output_path.endswith(".mp3"):
+        response_format = "mp3"
+    elif output_path.endswith(".wav"):
+        response_format = "wav"
+    else:
+        response_format = "wav"
+
+    def _try_generate(voice_name: str) -> tuple[bool, Optional[str]]:
+        payload = {
+            "model": model,
+            "input": text,
+            "voice": voice_name,
+            "response_format": response_format,
+            "speed": speed,
+            "language": language,
+        }
+        if instructions:
+            payload["instructions"] = instructions
+
+        req = urllib.request.Request(
+            f"{base_url}{endpoint}",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=300) as response:
+                with open(output_path, "wb") as f:
+                    f.write(response.read())
+            return True, None
+        except urllib.error.HTTPError as e:
+            body = e.read().decode("utf-8", errors="replace")
+            return False, body or f"HTTP {e.code}"
+        except Exception as e:
+            return False, str(e)
+
+    success, error = _try_generate(voice)
+    if not success:
+        err = error or "unknown error"
+        if voice != DEFAULT_QWEN3_VOICE and (
+            "Unsupported speakers" in err or "unsupported voice" in err.lower() or "voice" in err.lower()
+        ):
+            logger.warning("Qwen3 TTS voice '%s' unavailable, falling back to %s", voice, DEFAULT_QWEN3_VOICE)
+            success, error = _try_generate(DEFAULT_QWEN3_VOICE)
+        if not success:
+            raise RuntimeError(f"Qwen3 TTS failed: {error or 'unknown error'}")
+
+    if not os.path.exists(output_path) or os.path.getsize(output_path) == 0:
+        raise RuntimeError("Qwen3 TTS produced no output")
+    return output_path
+
+
+def _check_qwen3_tts_available(tts_config: Optional[Dict[str, Any]] = None) -> bool:
+    """Check whether a Qwen3 TTS host was explicitly configured."""
+    cfg = tts_config or {}
+    qwen_config = cfg.get("qwen3", {}) if isinstance(cfg.get("qwen3"), dict) else {}
+    host = (
+        qwen_config.get("base_url")
+        or qwen_config.get("baseUrl")
+        or qwen_config.get("host")
+        or os.getenv("QWEN3_TTS_BASE_URL", "")
+        or os.getenv("QWEN3_TTS_HOST", "")
+    )
+    return bool(str(host or "").strip())
 
 
 # ===========================================================================
@@ -952,12 +1084,12 @@ def text_to_speech_tool(
         text = text[:max_len]
 
     # Detect platform from gateway env var to choose the best output format.
-    # Telegram voice bubbles require Opus (.ogg); OpenAI and ElevenLabs can
-    # produce Opus natively (no ffmpeg needed).  Edge TTS always outputs MP3
-    # and needs ffmpeg for conversion.
+    # Telegram and Discord voice messages prefer Opus (.ogg); OpenAI,
+    # ElevenLabs, Mistral, Gemini, and Qwen3 can produce Opus natively.
+    # Edge TTS always outputs MP3 and needs ffmpeg for conversion.
     from gateway.session_context import get_session_env
     platform = get_session_env("HERMES_SESSION_PLATFORM", "").lower()
-    want_opus = (platform == "telegram")
+    want_opus = (platform in ("telegram", "discord"))
 
     # Determine output path
     if output_path:
@@ -966,9 +1098,9 @@ def text_to_speech_tool(
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         out_dir = Path(DEFAULT_OUTPUT_DIR)
         out_dir.mkdir(parents=True, exist_ok=True)
-        # Use .ogg for Telegram with providers that support native Opus output,
-        # otherwise fall back to .mp3 (Edge TTS will attempt ffmpeg conversion later).
-        if want_opus and provider in ("openai", "elevenlabs", "mistral", "gemini"):
+        # Use .ogg for Telegram/Discord with providers that support native Opus output,
+        # otherwise fall back to .mp3 (Edge/MiniMax/xAI/NeuTTS/KittenTTS may convert with ffmpeg later).
+        if want_opus and provider in ("openai", "elevenlabs", "mistral", "gemini", "qwen3"):
             file_path = out_dir / f"tts_{timestamp}.ogg"
         else:
             file_path = out_dir / f"tts_{timestamp}.mp3"
@@ -1000,6 +1132,15 @@ def text_to_speech_tool(
                 }, ensure_ascii=False)
             logger.info("Generating speech with OpenAI TTS...")
             _generate_openai_tts(text, file_str, tts_config)
+
+        elif provider == "qwen3":
+            if not _check_qwen3_tts_available(tts_config):
+                return json.dumps({
+                    "success": False,
+                    "error": "Qwen3 TTS provider selected but host is not configured. Set tts.qwen3.host or QWEN3_TTS_HOST."
+                }, ensure_ascii=False)
+            logger.info("Generating speech with Qwen3 TTS...")
+            _generate_qwen3_tts(text, file_str, tts_config)
 
         elif provider == "minimax":
             logger.info("Generating speech with MiniMax TTS...")
@@ -1092,7 +1233,8 @@ def text_to_speech_tool(
             if opus_path:
                 file_str = opus_path
                 voice_compatible = True
-        elif provider in ("elevenlabs", "openai", "mistral", "gemini"):
+        elif provider in ("elevenlabs", "openai", "mistral", "gemini", "qwen3"):
+            # These providers can output Opus natively if the path ends in .ogg.
             voice_compatible = file_str.endswith(".ogg")
 
         file_size = os.path.getsize(file_str)
@@ -1170,6 +1312,8 @@ def check_tts_requirements() -> bool:
             return True
     except ImportError:
         pass
+    if _check_qwen3_tts_available(_load_tts_config()):
+        return True
     if _check_neutts_available():
         return True
     if _check_kittentts_available():

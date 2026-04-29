@@ -750,7 +750,7 @@ DEFAULT_CONFIG = {
     # limit (OpenAI 4096, xAI 15000, MiniMax 10000, ElevenLabs 5k-40k model-aware,
     # Gemini 5000, Edge 5000, Mistral 4000, NeuTTS/KittenTTS 2000).
     "tts": {
-        "provider": "edge",  # "edge" (free) | "elevenlabs" (premium) | "openai" | "xai" | "minimax" | "mistral" | "neutts" (local)
+        "provider": "edge",  # "edge" (free) | "elevenlabs" (premium) | "openai" | "qwen3" | "xai" | "minimax" | "mistral" | "neutts" (local)
         "edge": {
             "voice": "en-US-AriaNeural",
             # Popular: AriaNeural, JennyNeural, AndrewNeural, BrianNeural, SoniaNeural
@@ -763,6 +763,15 @@ DEFAULT_CONFIG = {
             "model": "gpt-4o-mini-tts",
             "voice": "alloy",
             # Voices: alloy, echo, fable, onyx, nova, shimmer
+        },
+        "qwen3": {
+            "base_url": "",  # Self-hosted OpenAI-compatible /v1 speech endpoint, e.g. http://127.0.0.1:8000/v1
+            "host": "",  # Legacy shorthand host, e.g. 127.0.0.1:8000
+            "model": "qwen3-tts-base",
+            "voice": "ono_anna",
+            "language": "English",
+            "speed": 1.0,
+            "instructions": "",
         },
         "xai": {
             "voice_id": "eve",
