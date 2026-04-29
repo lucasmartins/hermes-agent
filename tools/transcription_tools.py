@@ -8,6 +8,7 @@ Provides speech-to-text transcription with six providers:
     Auto-downloads the model (~150 MB for ``base``) on first use.
   - **groq** (free tier) — Groq Whisper API, requires ``GROQ_API_KEY``.
   - **openai** (paid) — OpenAI Whisper API, requires ``VOICE_TOOLS_OPENAI_KEY``.
+  - **qwen3** — Qwen3-ASR via a self-hosted OpenAI-compatible endpoint.
   - **mistral** — Mistral Voxtral Transcribe API, requires ``MISTRAL_API_KEY``.
   - **xai** — xAI Grok STT API, requires ``XAI_API_KEY``. High accuracy,
     Inverse Text Normalization, diarization, 21 languages.
@@ -70,6 +71,12 @@ DEFAULT_LOCAL_STT_LANGUAGE = "en"
 DEFAULT_STT_MODEL = os.getenv("STT_OPENAI_MODEL", "whisper-1")
 DEFAULT_GROQ_STT_MODEL = os.getenv("STT_GROQ_MODEL", "whisper-large-v3-turbo")
 DEFAULT_MISTRAL_STT_MODEL = os.getenv("STT_MISTRAL_MODEL", "voxtral-mini-latest")
+BUILTIN_QWEN3_ASR_MODEL = "Qwen/Qwen3-ASR-1.7B"
+DEFAULT_QWEN3_ASR_MODEL = os.getenv("QWEN3_ASR_MODEL", BUILTIN_QWEN3_ASR_MODEL)
+QWEN3_ASR_BASE_URL_ENV = "QWEN3_ASR_BASE_URL"
+QWEN3_ASR_HOST_ENV = "QWEN3_ASR_HOST"
+QWEN3_ASR_API_KEY_ENV = "QWEN3_ASR_API_KEY"
+QWEN3_ASR_LANGUAGE_ENV = "QWEN3_ASR_LANGUAGE"
 LOCAL_STT_COMMAND_ENV = "HERMES_LOCAL_STT_COMMAND"
 LOCAL_STT_LANGUAGE_ENV = "HERMES_LOCAL_STT_LANGUAGE"
 COMMON_LOCAL_BIN_DIRS = ("/opt/homebrew/bin", "/usr/local/bin")
@@ -117,6 +124,66 @@ def _has_openai_audio_backend() -> bool:
     """Return True when OpenAI audio can use config credentials, env credentials, or the managed gateway."""
     try:
         _resolve_openai_audio_client_config()
+        return True
+    except ValueError:
+        return False
+
+
+def _normalize_qwen3_asr_base_url(value: str) -> str:
+    """Normalize a Qwen3-ASR host/base URL to an OpenAI-compatible /v1 base URL."""
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    if "://" not in raw:
+        raw = f"http://{raw}"
+    raw = raw.rstrip("/")
+    for suffix in ("/audio/transcriptions", "/audio/translations"):
+        if raw.endswith(suffix):
+            raw = raw[: -len(suffix)].rstrip("/")
+    if not raw.endswith("/v1"):
+        raw = f"{raw}/v1"
+    return raw
+
+
+def _resolve_qwen3_asr_client_config(stt_config: Optional[dict] = None) -> tuple[str, str]:
+    """Return (api_key, base_url) for a self-hosted Qwen3-ASR endpoint.
+
+    Qwen3-ASR servers such as vLLM and qwen3_asr_rs expose the OpenAI Audio
+    Transcriptions API. Local/self-hosted servers commonly ignore auth, so the
+    default API key is the OpenAI SDK sentinel ``EMPTY``. We still allow a key
+    for hosted endpoints and reverse proxies.
+    """
+    if stt_config is None:
+        stt_config = _load_stt_config()
+    qwen_cfg = stt_config.get("qwen3", {}) if isinstance(stt_config.get("qwen3"), dict) else {}
+    configured_base = (
+        qwen_cfg.get("base_url")
+        or qwen_cfg.get("baseUrl")
+        or os.getenv(QWEN3_ASR_BASE_URL_ENV)
+        or qwen_cfg.get("host")
+        or os.getenv(QWEN3_ASR_HOST_ENV)
+        or ""
+    )
+    base_url = _normalize_qwen3_asr_base_url(str(configured_base))
+    if not base_url:
+        raise ValueError(
+            f"Qwen3 ASR provider selected but no endpoint is configured. "
+            f"Set stt.qwen3.base_url or {QWEN3_ASR_BASE_URL_ENV} "
+            f"(for example, http://127.0.0.1:8002/v1)."
+        )
+
+    api_key = (
+        qwen_cfg.get("api_key")
+        or qwen_cfg.get("apiKey")
+        or os.getenv(QWEN3_ASR_API_KEY_ENV)
+        or "EMPTY"
+    )
+    return str(api_key), base_url
+
+
+def _has_qwen3_asr_backend(stt_config: Optional[dict] = None) -> bool:
+    try:
+        _resolve_qwen3_asr_client_config(stt_config)
         return True
     except ValueError:
         return False
@@ -188,7 +255,7 @@ def _get_provider(stt_config: dict) -> str:
 
     When ``stt.provider`` is explicitly set in config, that choice is
     honoured — no silent cloud fallback.  When no provider is configured,
-    auto-detect tries: local > groq (free) > openai (paid).
+    auto-detect tries: local > qwen3 > groq (free) > openai (paid).
     """
     if not is_stt_enabled(stt_config):
         return "none"
@@ -237,6 +304,15 @@ def _get_provider(stt_config: dict) -> str:
             )
             return "none"
 
+        if provider == "qwen3":
+            if _HAS_OPENAI and _has_qwen3_asr_backend(stt_config):
+                return "qwen3"
+            logger.warning(
+                "STT provider 'qwen3' configured but unavailable "
+                f"(install openai and set stt.qwen3.base_url or {QWEN3_ASR_BASE_URL_ENV})"
+            )
+            return "none"
+
         if provider == "mistral":
             if _HAS_MISTRAL and os.getenv("MISTRAL_API_KEY"):
                 return "mistral"
@@ -256,12 +332,15 @@ def _get_provider(stt_config: dict) -> str:
 
         return provider  # Unknown — let it fail downstream
 
-    # --- Auto-detect (no explicit provider): local > groq > openai > mistral > xai -
+    # --- Auto-detect (no explicit provider): local > qwen3 > groq > openai > mistral > xai -
 
     if _HAS_FASTER_WHISPER:
         return "local"
     if _has_local_command():
         return "local_command"
+    if _HAS_OPENAI and _has_qwen3_asr_backend(stt_config):
+        logger.info("No local STT available, using Qwen3 ASR endpoint")
+        return "qwen3"
     if _HAS_OPENAI and os.getenv("GROQ_API_KEY"):
         logger.info("No local STT available, using Groq Whisper API")
         return "groq"
@@ -629,6 +708,84 @@ def _transcribe_openai(file_path: str, model_name: str) -> Dict[str, Any]:
         logger.error("OpenAI transcription failed: %s", e, exc_info=True)
         return {"success": False, "transcript": "", "error": f"Transcription failed: {e}"}
 
+
+# ---------------------------------------------------------------------------
+# Provider: qwen3 (Qwen3-ASR via OpenAI-compatible API)
+# ---------------------------------------------------------------------------
+
+
+def _transcribe_qwen3(file_path: str, model_name: str) -> Dict[str, Any]:
+    """Transcribe using a self-hosted Qwen3-ASR OpenAI-compatible endpoint."""
+    stt_config = _load_stt_config()
+    qwen_cfg = stt_config.get("qwen3", {}) if isinstance(stt_config.get("qwen3"), dict) else {}
+
+    try:
+        api_key, base_url = _resolve_qwen3_asr_client_config(stt_config)
+    except ValueError as exc:
+        return {"success": False, "transcript": "", "error": str(exc)}
+
+    if not _HAS_OPENAI:
+        return {"success": False, "transcript": "", "error": "openai package not installed"}
+
+    language = str(qwen_cfg.get("language") or os.getenv(QWEN3_ASR_LANGUAGE_ENV) or "").strip()
+    response_format = str(qwen_cfg.get("response_format") or "json").strip()
+    prompt = str(qwen_cfg.get("prompt") or "").strip()
+    temperature = qwen_cfg.get("temperature")
+
+    try:
+        from openai import OpenAI, APIError, APIConnectionError, APITimeoutError
+
+        client = OpenAI(api_key=api_key, base_url=base_url, timeout=120, max_retries=0)
+        try:
+            request_kwargs: Dict[str, Any] = {
+                "model": model_name,
+                "file": None,
+                "response_format": response_format,
+            }
+            if language:
+                request_kwargs["language"] = language
+            if prompt:
+                request_kwargs["prompt"] = prompt
+            if temperature is not None and str(temperature).strip() != "":
+                request_kwargs["temperature"] = float(temperature)
+
+            with open(file_path, "rb") as audio_file:
+                request_kwargs["file"] = audio_file
+                transcription = client.audio.transcriptions.create(**request_kwargs)
+
+            transcript_text = _extract_transcript_text(transcription)
+            if not transcript_text:
+                return {
+                    "success": False,
+                    "transcript": "",
+                    "error": "Qwen3 ASR returned empty transcript",
+                }
+
+            logger.info(
+                "Transcribed %s via Qwen3 ASR (%s, %d chars)",
+                Path(file_path).name,
+                model_name,
+                len(transcript_text),
+            )
+            return {"success": True, "transcript": transcript_text, "provider": "qwen3"}
+        finally:
+            close = getattr(client, "close", None)
+            if callable(close):
+                close()
+
+    except PermissionError:
+        return {"success": False, "transcript": "", "error": f"Permission denied: {file_path}"}
+    except APIConnectionError as e:
+        return {"success": False, "transcript": "", "error": f"Connection error: {e}"}
+    except APITimeoutError as e:
+        return {"success": False, "transcript": "", "error": f"Request timeout: {e}"}
+    except APIError as e:
+        return {"success": False, "transcript": "", "error": f"Qwen3 ASR API error: {e}"}
+    except Exception as e:
+        logger.error("Qwen3 ASR transcription failed: %s", e, exc_info=True)
+        return {"success": False, "transcript": "", "error": f"Qwen3 ASR transcription failed: {e}"}
+
+
 # ---------------------------------------------------------------------------
 # Provider: mistral (Voxtral Transcribe API)
 # ---------------------------------------------------------------------------
@@ -778,7 +935,7 @@ def transcribe_audio(file_path: str, model: Optional[str] = None) -> Dict[str, A
 
     Provider priority:
       1. User config (``stt.provider`` in config.yaml)
-      2. Auto-detect: local faster-whisper (free) > Groq (free tier) > OpenAI (paid)
+      2. Auto-detect: local faster-whisper/local command > Qwen3-ASR endpoint > Groq > OpenAI > Mistral > xAI
 
     Args:
         file_path: Absolute path to the audio file to transcribe.
@@ -830,6 +987,18 @@ def transcribe_audio(file_path: str, model: Optional[str] = None) -> Dict[str, A
         model_name = model or openai_cfg.get("model", DEFAULT_STT_MODEL)
         return _transcribe_openai(file_path, model_name)
 
+    if provider == "qwen3":
+        qwen3_cfg = stt_config.get("qwen3", {}) if isinstance(stt_config.get("qwen3"), dict) else {}
+        configured_model = str(qwen3_cfg.get("model") or "").strip()
+        env_model = os.getenv("QWEN3_ASR_MODEL")
+        if model:
+            model_name = model
+        elif configured_model and (configured_model != BUILTIN_QWEN3_ASR_MODEL or not env_model):
+            model_name = configured_model
+        else:
+            model_name = env_model or configured_model or BUILTIN_QWEN3_ASR_MODEL
+        return _transcribe_qwen3(file_path, model_name)
+
     if provider == "mistral":
         mistral_cfg = stt_config.get("mistral", {})
         model_name = model or mistral_cfg.get("model", DEFAULT_MISTRAL_STT_MODEL)
@@ -847,6 +1016,7 @@ def transcribe_audio(file_path: str, model: Optional[str] = None) -> Dict[str, A
         "error": (
             "No STT provider available. Install faster-whisper for free local "
             f"transcription, configure {LOCAL_STT_COMMAND_ENV} or install a local whisper CLI, "
+            f"set {QWEN3_ASR_BASE_URL_ENV} for a self-hosted Qwen3-ASR endpoint, "
             "set GROQ_API_KEY for free Groq Whisper, set MISTRAL_API_KEY for Mistral "
             "Voxtral Transcribe, set XAI_API_KEY for xAI Grok STT, or set VOICE_TOOLS_OPENAI_KEY "
             "or OPENAI_API_KEY for the OpenAI Whisper API."

@@ -49,6 +49,12 @@ def clean_env(monkeypatch):
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.delenv("GROQ_API_KEY", raising=False)
     monkeypatch.delenv("MISTRAL_API_KEY", raising=False)
+    monkeypatch.delenv("XAI_API_KEY", raising=False)
+    monkeypatch.delenv("QWEN3_ASR_BASE_URL", raising=False)
+    monkeypatch.delenv("QWEN3_ASR_HOST", raising=False)
+    monkeypatch.delenv("QWEN3_ASR_API_KEY", raising=False)
+    monkeypatch.delenv("QWEN3_ASR_MODEL", raising=False)
+    monkeypatch.delenv("QWEN3_ASR_LANGUAGE", raising=False)
     monkeypatch.delenv("HERMES_LOCAL_STT_COMMAND", raising=False)
     monkeypatch.delenv("HERMES_LOCAL_STT_LANGUAGE", raising=False)
 
@@ -910,6 +916,198 @@ class TestTranscribeAudioDispatch:
             transcribe_audio(sample_ogg, model=None)
 
         assert mock_openai.call_args[0][1] == "gpt-4o-transcribe"
+
+
+# ============================================================================
+# _transcribe_qwen3
+# ============================================================================
+
+class TestTranscribeQwen3:
+    def test_no_endpoint_configured(self, monkeypatch):
+        monkeypatch.delenv("QWEN3_ASR_BASE_URL", raising=False)
+        monkeypatch.delenv("QWEN3_ASR_HOST", raising=False)
+        from tools.transcription_tools import _transcribe_qwen3
+        result = _transcribe_qwen3("/tmp/test.ogg", "Qwen/Qwen3-ASR-1.7B")
+        assert result["success"] is False
+        assert "base_url" in result["error"]
+
+    def test_base_url_normalization(self):
+        from tools.transcription_tools import _normalize_qwen3_asr_base_url
+        assert _normalize_qwen3_asr_base_url("127.0.0.1:8002") == "http://127.0.0.1:8002/v1"
+        assert _normalize_qwen3_asr_base_url("http://localhost:8002/v1/audio/transcriptions") == "http://localhost:8002/v1"
+
+    def test_successful_transcription(self, sample_ogg):
+        mock_client = MagicMock()
+        mock_response = MagicMock()
+        mock_response.text = "hello from qwen3"
+        mock_client.audio.transcriptions.create.return_value = mock_response
+
+        config = {
+            "provider": "qwen3",
+            "qwen3": {
+                "base_url": "127.0.0.1:8002",
+                "language": "english",
+                "response_format": "json",
+                "prompt": "Prefer punctuation.",
+            },
+        }
+        with patch("tools.transcription_tools._load_stt_config", return_value=config), \
+             patch("tools.transcription_tools._HAS_OPENAI", True), \
+             patch("openai.OpenAI", return_value=mock_client) as mock_openai:
+            from tools.transcription_tools import _transcribe_qwen3
+            result = _transcribe_qwen3(sample_ogg, "Qwen/Qwen3-ASR-1.7B")
+
+        assert result["success"] is True
+        assert result["transcript"] == "hello from qwen3"
+        assert result["provider"] == "qwen3"
+        mock_openai.assert_called_once()
+        kwargs = mock_openai.call_args.kwargs
+        assert kwargs["api_key"] == "EMPTY"
+        assert str(kwargs["base_url"]) == "http://127.0.0.1:8002/v1"
+        create_kwargs = mock_client.audio.transcriptions.create.call_args.kwargs
+        assert create_kwargs["model"] == "Qwen/Qwen3-ASR-1.7B"
+        assert create_kwargs["language"] == "english"
+        assert create_kwargs["response_format"] == "json"
+        assert create_kwargs["prompt"] == "Prefer punctuation."
+        mock_client.close.assert_called_once()
+
+    def test_custom_api_key_from_config(self, sample_ogg):
+        mock_client = MagicMock()
+        mock_client.audio.transcriptions.create.return_value = {"text": "ok"}
+        config = {"qwen3": {"base_url": "http://localhost:8002/v1", "api_key": "proxy-key"}}
+
+        with patch("tools.transcription_tools._load_stt_config", return_value=config), \
+             patch("tools.transcription_tools._HAS_OPENAI", True), \
+             patch("openai.OpenAI", return_value=mock_client) as mock_openai:
+            from tools.transcription_tools import _transcribe_qwen3
+            result = _transcribe_qwen3(sample_ogg, "Qwen/Qwen3-ASR-0.6B")
+
+        assert result["success"] is True
+        assert mock_openai.call_args.kwargs["api_key"] == "proxy-key"
+
+    def test_language_from_qwen3_env_not_local_stt_env(self, sample_ogg, monkeypatch):
+        mock_client = MagicMock()
+        mock_client.audio.transcriptions.create.return_value = {"text": "ok"}
+        monkeypatch.setenv("QWEN3_ASR_LANGUAGE", "chinese")
+        monkeypatch.setenv("HERMES_LOCAL_STT_LANGUAGE", "en")
+        config = {"qwen3": {"base_url": "http://localhost:8002/v1"}}
+
+        with patch("tools.transcription_tools._load_stt_config", return_value=config), \
+             patch("tools.transcription_tools._HAS_OPENAI", True), \
+             patch("openai.OpenAI", return_value=mock_client):
+            from tools.transcription_tools import _transcribe_qwen3
+            result = _transcribe_qwen3(sample_ogg, "Qwen/Qwen3-ASR-1.7B")
+
+        assert result["success"] is True
+        create_kwargs = mock_client.audio.transcriptions.create.call_args.kwargs
+        assert create_kwargs["language"] == "chinese"
+
+    def test_empty_transcript_returns_failure(self, sample_ogg):
+        mock_client = MagicMock()
+        mock_client.audio.transcriptions.create.return_value = {"text": "   "}
+        config = {"qwen3": {"base_url": "http://localhost:8002/v1"}}
+
+        with patch("tools.transcription_tools._load_stt_config", return_value=config), \
+             patch("tools.transcription_tools._HAS_OPENAI", True), \
+             patch("openai.OpenAI", return_value=mock_client):
+            from tools.transcription_tools import _transcribe_qwen3
+            result = _transcribe_qwen3(sample_ogg, "Qwen/Qwen3-ASR-1.7B")
+
+        assert result["success"] is False
+        assert "empty transcript" in result["error"]
+
+
+# ============================================================================
+# _get_provider — Qwen3-ASR
+# ============================================================================
+
+class TestGetProviderQwen3:
+    def test_qwen3_when_endpoint_configured(self):
+        with patch("tools.transcription_tools._HAS_OPENAI", True):
+            from tools.transcription_tools import _get_provider
+            assert _get_provider({"provider": "qwen3", "qwen3": {"base_url": "http://localhost:8002/v1"}}) == "qwen3"
+
+    def test_qwen3_explicit_no_endpoint_returns_none(self):
+        with patch("tools.transcription_tools._HAS_OPENAI", True):
+            from tools.transcription_tools import _get_provider
+            assert _get_provider({"provider": "qwen3"}) == "none"
+
+    def test_qwen3_explicit_no_openai_sdk_returns_none(self):
+        with patch("tools.transcription_tools._HAS_OPENAI", False):
+            from tools.transcription_tools import _get_provider
+            assert _get_provider({"provider": "qwen3", "qwen3": {"base_url": "http://localhost:8002/v1"}}) == "none"
+
+    def test_auto_detect_qwen3_before_cloud(self, monkeypatch):
+        monkeypatch.setenv("QWEN3_ASR_BASE_URL", "http://localhost:8002/v1")
+        monkeypatch.setenv("GROQ_API_KEY", "gsk-test")
+        with patch("tools.transcription_tools._HAS_FASTER_WHISPER", False), \
+             patch("tools.transcription_tools._has_local_command", return_value=False), \
+             patch("tools.transcription_tools._HAS_OPENAI", True):
+            from tools.transcription_tools import _get_provider
+            assert _get_provider({}) == "qwen3"
+
+
+# ============================================================================
+# transcribe_audio — Qwen3-ASR dispatch
+# ============================================================================
+
+class TestTranscribeAudioQwen3Dispatch:
+    def test_dispatches_to_qwen3(self, sample_ogg):
+        with patch("tools.transcription_tools._load_stt_config", return_value={"provider": "qwen3"}), \
+             patch("tools.transcription_tools._get_provider", return_value="qwen3"), \
+             patch("tools.transcription_tools._transcribe_qwen3",
+                   return_value={"success": True, "transcript": "hi", "provider": "qwen3"}) as mock_qwen3:
+            from tools.transcription_tools import transcribe_audio
+            result = transcribe_audio(sample_ogg)
+
+        assert result["success"] is True
+        assert result["provider"] == "qwen3"
+        mock_qwen3.assert_called_once()
+
+    def test_config_qwen3_model_used(self, sample_ogg):
+        config = {"provider": "qwen3", "qwen3": {"model": "Qwen/Qwen3-ASR-0.6B"}}
+        with patch("tools.transcription_tools._load_stt_config", return_value=config), \
+             patch("tools.transcription_tools._get_provider", return_value="qwen3"), \
+             patch("tools.transcription_tools._transcribe_qwen3",
+                   return_value={"success": True, "transcript": "hi"}) as mock_qwen3:
+            from tools.transcription_tools import transcribe_audio
+            transcribe_audio(sample_ogg, model=None)
+
+        assert mock_qwen3.call_args[0][1] == "Qwen/Qwen3-ASR-0.6B"
+
+    def test_env_qwen3_model_overrides_merged_default_model(self, sample_ogg, monkeypatch):
+        monkeypatch.setenv("QWEN3_ASR_MODEL", "Qwen/Qwen3-ASR-0.6B")
+        config = {"provider": "qwen3", "qwen3": {"model": "Qwen/Qwen3-ASR-1.7B"}}
+        with patch("tools.transcription_tools._load_stt_config", return_value=config), \
+             patch("tools.transcription_tools._get_provider", return_value="qwen3"), \
+             patch("tools.transcription_tools._transcribe_qwen3",
+                   return_value={"success": True, "transcript": "hi"}) as mock_qwen3:
+            from tools.transcription_tools import transcribe_audio
+            transcribe_audio(sample_ogg, model=None)
+
+        assert mock_qwen3.call_args[0][1] == "Qwen/Qwen3-ASR-0.6B"
+
+    def test_config_qwen3_model_overrides_env_model(self, sample_ogg, monkeypatch):
+        monkeypatch.setenv("QWEN3_ASR_MODEL", "env-qwen3-model")
+        config = {"provider": "qwen3", "qwen3": {"model": "custom-config-qwen3-model"}}
+        with patch("tools.transcription_tools._load_stt_config", return_value=config), \
+             patch("tools.transcription_tools._get_provider", return_value="qwen3"), \
+             patch("tools.transcription_tools._transcribe_qwen3",
+                   return_value={"success": True, "transcript": "hi"}) as mock_qwen3:
+            from tools.transcription_tools import transcribe_audio
+            transcribe_audio(sample_ogg, model=None)
+
+        assert mock_qwen3.call_args[0][1] == "custom-config-qwen3-model"
+
+    def test_model_override_passed_to_qwen3(self, sample_ogg):
+        with patch("tools.transcription_tools._load_stt_config", return_value={}), \
+             patch("tools.transcription_tools._get_provider", return_value="qwen3"), \
+             patch("tools.transcription_tools._transcribe_qwen3",
+                   return_value={"success": True, "transcript": "hi"}) as mock_qwen3:
+            from tools.transcription_tools import transcribe_audio
+            transcribe_audio(sample_ogg, model="custom-qwen3-asr")
+
+        assert mock_qwen3.call_args[0][1] == "custom-qwen3-asr"
 
 
 # ============================================================================

@@ -123,8 +123,11 @@ Voice messages sent on Telegram, Discord, WhatsApp, Slack, or Signal are automat
 | Provider | Quality | Cost | API Key |
 |----------|---------|------|---------| 
 | **Local Whisper** (default) | Good | Free | None needed |
+| **Qwen3-ASR** | Good–Best | Free/self-hosted | Optional (`QWEN3_ASR_API_KEY`) |
 | **Groq Whisper API** | Good–Best | Free tier | `GROQ_API_KEY` |
 | **OpenAI Whisper API** | Good–Best | Paid | `VOICE_TOOLS_OPENAI_KEY` or `OPENAI_API_KEY` |
+| **Mistral Voxtral Transcribe** | Good–Best | Paid | `MISTRAL_API_KEY` |
+| **xAI Grok STT** | Good–Best | Paid | `XAI_API_KEY` |
 
 :::info Zero Config
 Local transcription works out of the box when `faster-whisper` is installed. If that's unavailable, Hermes can also use a local `whisper` CLI from common install locations (like `/opt/homebrew/bin`) or a custom command via `HERMES_LOCAL_STT_COMMAND`.
@@ -135,9 +138,13 @@ Local transcription works out of the box when `faster-whisper` is installed. If 
 ```yaml
 # In ~/.hermes/config.yaml
 stt:
-  provider: "local"           # "local" | "groq" | "openai" | "mistral"
+  provider: "local"           # "local" | "qwen3" | "groq" | "openai" | "mistral" | "xai"
   local:
     model: "base"             # tiny, base, small, medium, large-v3
+  qwen3:
+    base_url: "http://127.0.0.1:8002/v1"  # OpenAI-compatible /v1 endpoint
+    model: "Qwen/Qwen3-ASR-1.7B"          # or Qwen/Qwen3-ASR-0.6B
+    language: ""                          # optional hint, e.g. "english" or "chinese"
   openai:
     model: "whisper-1"        # whisper-1, gpt-4o-mini-transcribe, gpt-4o-transcribe
   mistral:
@@ -158,9 +165,13 @@ stt:
 
 **Groq API** — Requires `GROQ_API_KEY`. Good cloud fallback when you want a free hosted STT option.
 
+**Qwen3-ASR** — Uses a self-hosted OpenAI-compatible `/v1/audio/transcriptions` endpoint, such as vLLM serving `Qwen/Qwen3-ASR-1.7B` or `qwen3_asr_rs`. Configure `stt.qwen3.base_url` or `QWEN3_ASR_BASE_URL`; local endpoints can leave the API key empty, while hosted/proxied endpoints can set `stt.qwen3.api_key` or `QWEN3_ASR_API_KEY`.
+
 **OpenAI API** — Accepts `VOICE_TOOLS_OPENAI_KEY` first and falls back to `OPENAI_API_KEY`. Supports `whisper-1`, `gpt-4o-mini-transcribe`, and `gpt-4o-transcribe`.
 
 **Mistral API (Voxtral Transcribe)** — Requires `MISTRAL_API_KEY`. Uses Mistral's [Voxtral Transcribe](https://docs.mistral.ai/capabilities/audio/speech_to_text/) models. Supports 13 languages, speaker diarization, and word-level timestamps. Install with `pip install hermes-agent[mistral]`.
+
+**xAI Grok STT** — Requires `XAI_API_KEY`. Uses xAI's OpenAI-compatible audio transcription endpoint and supports inverse text normalization, optional diarization, and multiple response formats.
 
 **Custom local CLI fallback** — Set `HERMES_LOCAL_STT_COMMAND` if you want Hermes to call a local transcription command directly. The command template supports `{input_path}`, `{output_dir}`, `{language}`, and `{model}` placeholders.
 
@@ -168,7 +179,9 @@ stt:
 
 If your configured provider isn't available, Hermes automatically falls back:
 - **Local faster-whisper unavailable** → Tries a local `whisper` CLI or `HERMES_LOCAL_STT_COMMAND` before cloud providers
-- **Groq key not set** → Falls back to local transcription, then OpenAI
-- **OpenAI key not set** → Falls back to local transcription, then Groq
-- **Mistral key/SDK not set** → Skipped in auto-detect; falls through to next available provider
+- **Qwen3-ASR endpoint not configured** → Skipped in auto-detect; explicit `provider: "qwen3"` fails clearly instead of silently using another provider
+- **Groq key not set** → Skipped in auto-detect; explicit `provider: "groq"` fails clearly instead of silently using another provider
+- **OpenAI key not set** → Skipped in auto-detect; explicit `provider: "openai"` fails clearly instead of silently using another provider
+- **Mistral key/SDK not set** → Skipped in auto-detect; explicit `provider: "mistral"` fails clearly instead of silently using another provider
+- **xAI key not set** → Skipped in auto-detect; explicit `provider: "xai"` fails clearly instead of silently using another provider
 - **Nothing available** → Voice messages pass through with an accurate note to the user

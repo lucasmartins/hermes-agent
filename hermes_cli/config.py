@@ -784,13 +784,21 @@ DEFAULT_CONFIG = {
     
     "stt": {
         "enabled": True,
-        "provider": "local",  # "local" (free, faster-whisper) | "groq" | "openai" (Whisper API) | "mistral" (Voxtral Transcribe)
+        "provider": "local",  # "local" (free, faster-whisper) | "qwen3" (self-hosted Qwen3-ASR) | "groq" | "openai" | "mistral" | "xai"
         "local": {
             "model": "base",  # tiny, base, small, medium, large-v3
             "language": "",  # auto-detect by default; set to "en", "es", "fr", etc. to force
         },
         "openai": {
             "model": "whisper-1",  # whisper-1, gpt-4o-mini-transcribe, gpt-4o-transcribe
+        },
+        "qwen3": {
+            "base_url": "",  # OpenAI-compatible endpoint, e.g. http://127.0.0.1:8002/v1
+            "api_key": "",   # optional for hosted/proxied endpoints; local vLLM can leave this empty
+            "model": "Qwen/Qwen3-ASR-1.7B",  # Qwen/Qwen3-ASR-1.7B or Qwen/Qwen3-ASR-0.6B
+            "language": "",  # optional language hint, e.g. "english" or "chinese"
+            "response_format": "json",  # json, text, or verbose_json
+            "prompt": "",  # optional ASR context/prompt supported by OpenAI-compatible servers
         },
         "mistral": {
             "model": "voxtral-mini-latest",  # voxtral-mini-latest, voxtral-mini-2602

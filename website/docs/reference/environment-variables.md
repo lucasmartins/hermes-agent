@@ -69,13 +69,18 @@ All variables go in `~/.hermes/.env`. You can also set them with `hermes config 
 | `NVIDIA_BASE_URL` | Override NVIDIA base URL (default: `https://integrate.api.nvidia.com/v1`; set to `http://localhost:8000/v1` for a local NIM endpoint) |
 | `OLLAMA_API_KEY` | Ollama Cloud API key — managed Ollama catalog without local GPU ([ollama.com/settings/keys](https://ollama.com/settings/keys)) |
 | `OLLAMA_BASE_URL` | Override Ollama Cloud base URL (default: `https://ollama.com/v1`) |
-| `XAI_API_KEY` | xAI (Grok) API key for chat + TTS ([console.x.ai](https://console.x.ai/)) |
-| `XAI_BASE_URL` | Override xAI base URL (default: `https://api.x.ai/v1`) |
+| `XAI_API_KEY` | xAI (Grok) API key for chat + TTS/STT ([console.x.ai](https://console.x.ai/)) |
+| `XAI_BASE_URL` | Override xAI base URL for chat/TTS (default: `https://api.x.ai/v1`) |
+| `XAI_STT_BASE_URL` | Override xAI speech-to-text base URL (default: `https://api.x.ai/v1`) |
 | `MISTRAL_API_KEY` | Mistral API key for Voxtral TTS and Voxtral STT ([console.mistral.ai](https://console.mistral.ai)) |
 | `AWS_REGION` | AWS region for Bedrock inference (e.g. `us-east-1`, `eu-central-1`). Read by boto3. |
 | `AWS_PROFILE` | AWS named profile for Bedrock authentication (reads `~/.aws/credentials`). Leave unset to use default boto3 credential chain. |
 | `BEDROCK_BASE_URL` | Override Bedrock runtime base URL (default: `https://bedrock-runtime.us-east-1.amazonaws.com`; usually leave unset and use `AWS_REGION` instead) |
 | `HERMES_QWEN_BASE_URL` | Qwen Portal base URL override (default: `https://portal.qwen.ai/v1`) |
+| `QWEN3_ASR_BASE_URL` | Self-hosted Qwen3-ASR OpenAI-compatible `/v1` endpoint for speech-to-text (for example `http://127.0.0.1:8002/v1`) |
+| `QWEN3_ASR_API_KEY` | Optional API key for hosted/proxied Qwen3-ASR endpoints; local endpoints usually ignore auth |
+| `QWEN3_ASR_MODEL` | Override the Qwen3-ASR model name used by the STT provider (default: `Qwen/Qwen3-ASR-1.7B`) |
+| `QWEN3_ASR_LANGUAGE` | Optional language hint for Qwen3-ASR, e.g. `english` or `chinese` |
 | `OPENCODE_ZEN_API_KEY` | OpenCode Zen API key — pay-as-you-go access to curated models ([opencode.ai](https://opencode.ai/auth)) |
 | `OPENCODE_ZEN_BASE_URL` | Override OpenCode Zen base URL |
 | `OPENCODE_GO_API_KEY` | OpenCode Go API key — $10/month subscription for open models ([opencode.ai](https://opencode.ai/auth)) |

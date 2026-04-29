@@ -737,14 +737,18 @@ platform_toolsets:
 # Voice Transcription (Speech-to-Text)
 # =============================================================================
 # Automatically transcribe voice messages on messaging platforms.
-# Providers: local (free, faster-whisper) | groq (free tier) | openai (Whisper API) | mistral (Voxtral Transcribe)
-# Set the corresponding API key in .env: GROQ_API_KEY, OPENAI_API_KEY, or MISTRAL_API_KEY.
+# Providers: local (free, faster-whisper) | qwen3 (self-hosted) | groq (free tier) | openai (Whisper API) | mistral (Voxtral Transcribe) | xai (Grok STT)
+# Set the corresponding API key in .env when needed: GROQ_API_KEY, OPENAI_API_KEY, MISTRAL_API_KEY, XAI_API_KEY, or QWEN3_ASR_API_KEY.
 stt:
   enabled: true
   # provider: "local"          # auto-detected if omitted
   local:
     model: "base"              # tiny | base | small | medium | large-v3 | turbo
     # language: ""             # auto-detect; set to "en", "es", "fr", etc. to force
+  # qwen3:
+  #   base_url: "http://127.0.0.1:8002/v1"  # OpenAI-compatible /v1 endpoint
+  #   model: "Qwen/Qwen3-ASR-1.7B"          # or Qwen/Qwen3-ASR-0.6B
+  #   language: ""                          # optional hint, e.g. "english" or "chinese"
   openai:
     model: "whisper-1"         # whisper-1 | gpt-4o-mini-transcribe | gpt-4o-transcribe
   # mistral:

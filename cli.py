@@ -7672,8 +7672,9 @@ class HermesCLI:
             raise RuntimeError(
                 "Voice mode requires an STT provider for transcription.\n"
                 "Option 1: pip install faster-whisper  (free, local)\n"
-                "Option 2: Set GROQ_API_KEY (free tier)\n"
-                "Option 3: Set VOICE_TOOLS_OPENAI_KEY (paid)"
+                "Option 2: Set stt.provider=qwen3 and stt.qwen3.base_url for self-hosted Qwen3-ASR\n"
+                "Option 3: Set GROQ_API_KEY (free tier)\n"
+                "Option 4: Set VOICE_TOOLS_OPENAI_KEY (paid)"
             )
 
         # Prevent double-start from concurrent threads (atomic check-and-set)
