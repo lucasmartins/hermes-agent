@@ -43,6 +43,20 @@ from tools.tool_backend_helpers import managed_nous_tools_enabled, resolve_opena
 
 logger = logging.getLogger(__name__)
 
+def get_env_value(name, default=None):
+    """Read env values through the live config module.
+
+    Tests may monkeypatch and later restore ``hermes_cli.config.get_env_value``
+    before this module is imported. Resolve the helper at call time so STT does
+    not keep a stale imported function for the rest of the test process.
+    """
+    try:
+        from hermes_cli.config import get_env_value as _get_env_value
+    except ImportError:
+        return os.getenv(name, default)
+    value = _get_env_value(name)
+    return default if value is None else value
+
 # ---------------------------------------------------------------------------
 # Optional imports — graceful degradation
 # ---------------------------------------------------------------------------
@@ -159,9 +173,9 @@ def _resolve_qwen3_asr_client_config(stt_config: Optional[dict] = None) -> tuple
     configured_base = (
         qwen_cfg.get("base_url")
         or qwen_cfg.get("baseUrl")
-        or os.getenv(QWEN3_ASR_BASE_URL_ENV)
+        or get_env_value(QWEN3_ASR_BASE_URL_ENV)
         or qwen_cfg.get("host")
-        or os.getenv(QWEN3_ASR_HOST_ENV)
+        or get_env_value(QWEN3_ASR_HOST_ENV)
         or ""
     )
     base_url = _normalize_qwen3_asr_base_url(str(configured_base))
@@ -175,7 +189,7 @@ def _resolve_qwen3_asr_client_config(stt_config: Optional[dict] = None) -> tuple
     api_key = (
         qwen_cfg.get("api_key")
         or qwen_cfg.get("apiKey")
-        or os.getenv(QWEN3_ASR_API_KEY_ENV)
+        or get_env_value(QWEN3_ASR_API_KEY_ENV)
         or "EMPTY"
     )
     return str(api_key), base_url
@@ -289,7 +303,7 @@ def _get_provider(stt_config: dict) -> str:
             return "none"
 
         if provider == "groq":
-            if _HAS_OPENAI and os.getenv("GROQ_API_KEY"):
+            if _HAS_OPENAI and get_env_value("GROQ_API_KEY"):
                 return "groq"
             logger.warning(
                 "STT provider 'groq' configured but GROQ_API_KEY not set"
@@ -314,7 +328,7 @@ def _get_provider(stt_config: dict) -> str:
             return "none"
 
         if provider == "mistral":
-            if _HAS_MISTRAL and os.getenv("MISTRAL_API_KEY"):
+            if _HAS_MISTRAL and get_env_value("MISTRAL_API_KEY"):
                 return "mistral"
             logger.warning(
                 "STT provider 'mistral' configured but mistralai package "
@@ -323,7 +337,7 @@ def _get_provider(stt_config: dict) -> str:
             return "none"
 
         if provider == "xai":
-            if os.getenv("XAI_API_KEY"):
+            if get_env_value("XAI_API_KEY"):
                 return "xai"
             logger.warning(
                 "STT provider 'xai' configured but XAI_API_KEY not set"
@@ -341,16 +355,16 @@ def _get_provider(stt_config: dict) -> str:
     if _HAS_OPENAI and _has_qwen3_asr_backend(stt_config):
         logger.info("No local STT available, using Qwen3 ASR endpoint")
         return "qwen3"
-    if _HAS_OPENAI and os.getenv("GROQ_API_KEY"):
+    if _HAS_OPENAI and get_env_value("GROQ_API_KEY"):
         logger.info("No local STT available, using Groq Whisper API")
         return "groq"
     if _HAS_OPENAI and _has_openai_audio_backend():
         logger.info("No local STT available, using OpenAI Whisper API")
         return "openai"
-    if _HAS_MISTRAL and os.getenv("MISTRAL_API_KEY"):
+    if _HAS_MISTRAL and get_env_value("MISTRAL_API_KEY"):
         logger.info("No local STT available, using Mistral Voxtral Transcribe API")
         return "mistral"
-    if os.getenv("XAI_API_KEY"):
+    if get_env_value("XAI_API_KEY"):
         logger.info("No local STT available, using xAI Grok STT API")
         return "xai"
     return "none"
@@ -606,7 +620,7 @@ def _transcribe_local_command(file_path: str, model_name: str) -> Dict[str, Any]
 
 def _transcribe_groq(file_path: str, model_name: str) -> Dict[str, Any]:
     """Transcribe using Groq Whisper API (free tier available)."""
-    api_key = os.getenv("GROQ_API_KEY")
+    api_key = get_env_value("GROQ_API_KEY")
     if not api_key:
         return {"success": False, "transcript": "", "error": "GROQ_API_KEY not set"}
 
@@ -727,7 +741,7 @@ def _transcribe_qwen3(file_path: str, model_name: str) -> Dict[str, Any]:
     if not _HAS_OPENAI:
         return {"success": False, "transcript": "", "error": "openai package not installed"}
 
-    language = str(qwen_cfg.get("language") or os.getenv(QWEN3_ASR_LANGUAGE_ENV) or "").strip()
+    language = str(qwen_cfg.get("language") or get_env_value(QWEN3_ASR_LANGUAGE_ENV) or "").strip()
     response_format = str(qwen_cfg.get("response_format") or "json").strip()
     prompt = str(qwen_cfg.get("prompt") or "").strip()
     temperature = qwen_cfg.get("temperature")
@@ -797,7 +811,7 @@ def _transcribe_mistral(file_path: str, model_name: str) -> Dict[str, Any]:
     Uses the ``mistralai`` Python SDK to call ``/v1/audio/transcriptions``.
     Requires ``MISTRAL_API_KEY`` environment variable.
     """
-    api_key = os.getenv("MISTRAL_API_KEY")
+    api_key = get_env_value("MISTRAL_API_KEY")
     if not api_key:
         return {"success": False, "transcript": "", "error": "MISTRAL_API_KEY not set"}
 
@@ -837,7 +851,7 @@ def _transcribe_xai(file_path: str, model_name: str) -> Dict[str, Any]:
     Supports Inverse Text Normalization, diarization, and word-level timestamps.
     Requires ``XAI_API_KEY`` environment variable.
     """
-    api_key = os.getenv("XAI_API_KEY")
+    api_key = get_env_value("XAI_API_KEY")
     if not api_key:
         return {"success": False, "transcript": "", "error": "XAI_API_KEY not set"}
 
@@ -845,7 +859,7 @@ def _transcribe_xai(file_path: str, model_name: str) -> Dict[str, Any]:
     xai_config = stt_config.get("xai", {})
     base_url = str(
         xai_config.get("base_url")
-        or os.getenv("XAI_STT_BASE_URL")
+        or get_env_value("XAI_STT_BASE_URL")
         or XAI_STT_BASE_URL
     ).strip().rstrip("/")
     language = str(
@@ -990,7 +1004,7 @@ def transcribe_audio(file_path: str, model: Optional[str] = None) -> Dict[str, A
     if provider == "qwen3":
         qwen3_cfg = stt_config.get("qwen3", {}) if isinstance(stt_config.get("qwen3"), dict) else {}
         configured_model = str(qwen3_cfg.get("model") or "").strip()
-        env_model = os.getenv("QWEN3_ASR_MODEL")
+        env_model = get_env_value("QWEN3_ASR_MODEL")
         if model:
             model_name = model
         elif configured_model and (configured_model != BUILTIN_QWEN3_ASR_MODEL or not env_model):
