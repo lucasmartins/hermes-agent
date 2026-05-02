@@ -218,6 +218,26 @@ class TestWebServerEndpoints:
         # Should contain known env var names
         assert any(k.endswith("_API_KEY") or k.endswith("_TOKEN") for k in data.keys())
 
+    def test_get_env_vars_includes_qwen3_asr_settings(self):
+        """Dashboard API keys/settings page should expose Qwen3 ASR env fallback knobs."""
+        resp = self.client.get("/api/env")
+        assert resp.status_code == 200
+        data = resp.json()
+
+        for key in [
+            "QWEN3_ASR_BASE_URL",
+            "QWEN3_ASR_HOST",
+            "QWEN3_ASR_API_KEY",
+            "QWEN3_ASR_MODEL",
+            "QWEN3_ASR_LANGUAGE",
+        ]:
+            assert key in data
+            assert data[key]["category"] == "tool"
+            assert "Qwen3 ASR" in data[key]["description"]
+
+        assert data["QWEN3_ASR_API_KEY"]["is_password"] is True
+        assert data["QWEN3_ASR_BASE_URL"]["is_password"] is False
+
     def test_reveal_env_var(self, tmp_path):
         """POST /api/env/reveal should return the real unredacted value."""
         from hermes_cli.config import save_env_value
@@ -377,6 +397,35 @@ class TestBuildSchemaFromConfig:
         assert "node24" in runtime_entry["options"]
         assert "python3.13" in runtime_entry["options"]
         assert len(runtime_entry["options"]) >= 3
+
+    def test_stt_provider_select_exposes_all_supported_providers(self):
+        """Dashboard must allow choosing every STT provider supported by runtime config."""
+        from hermes_cli.web_server import CONFIG_SCHEMA
+
+        entry = CONFIG_SCHEMA["stt.provider"]
+        assert entry["type"] == "select"
+        for provider in ["local", "qwen3", "groq", "openai", "mistral", "xai"]:
+            assert provider in entry["options"]
+
+    def test_qwen3_stt_schema_has_editable_endpoint_model_and_format_fields(self):
+        """Qwen3 ASR should be configurable from the dashboard, not only by YAML edits."""
+        from hermes_cli.web_server import CONFIG_SCHEMA
+
+        for field in [
+            "stt.qwen3.base_url",
+            "stt.qwen3.api_key",
+            "stt.qwen3.model",
+            "stt.qwen3.language",
+            "stt.qwen3.response_format",
+            "stt.qwen3.prompt",
+        ]:
+            assert field in CONFIG_SCHEMA
+            assert CONFIG_SCHEMA[field]["category"] == "stt"
+
+        assert CONFIG_SCHEMA["stt.qwen3.model"]["type"] == "select"
+        assert "Qwen/Qwen3-ASR-1.7B" in CONFIG_SCHEMA["stt.qwen3.model"]["options"]
+        assert CONFIG_SCHEMA["stt.qwen3.response_format"]["type"] == "select"
+        assert CONFIG_SCHEMA["stt.qwen3.response_format"]["options"] == ["json", "text", "verbose_json"]
 
     def test_empty_prefix_produces_correct_keys(self):
         from hermes_cli.web_server import _build_schema_from_config

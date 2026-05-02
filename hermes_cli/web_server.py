@@ -273,7 +273,48 @@ _SCHEMA_OVERRIDES: Dict[str, Dict[str, Any]] = {
     "stt.provider": {
         "type": "select",
         "description": "Speech-to-text provider",
-        "options": ["local", "openai", "mistral"],
+        "options": ["local", "qwen3", "groq", "openai", "mistral", "xai"],
+    },
+    "stt.local.model": {
+        "type": "select",
+        "description": "Local faster-whisper model",
+        "options": ["tiny", "base", "small", "medium", "large-v3", "turbo"],
+    },
+    "stt.openai.model": {
+        "type": "select",
+        "description": "OpenAI transcription model",
+        "options": ["whisper-1", "gpt-4o-mini-transcribe", "gpt-4o-transcribe"],
+    },
+    "stt.qwen3.base_url": {
+        "type": "string",
+        "description": "Qwen3 ASR OpenAI-compatible /v1 endpoint (for example http://127.0.0.1:8002/v1)",
+    },
+    "stt.qwen3.api_key": {
+        "type": "string",
+        "description": "Optional Qwen3 ASR API key for hosted/proxied endpoints; local servers can leave this empty",
+    },
+    "stt.qwen3.model": {
+        "type": "select",
+        "description": "Qwen3 ASR model",
+        "options": ["Qwen/Qwen3-ASR-1.7B", "Qwen/Qwen3-ASR-0.6B"],
+    },
+    "stt.qwen3.language": {
+        "type": "string",
+        "description": "Optional Qwen3 ASR language hint, e.g. english or chinese",
+    },
+    "stt.qwen3.response_format": {
+        "type": "select",
+        "description": "Qwen3 ASR response format",
+        "options": ["json", "text", "verbose_json"],
+    },
+    "stt.qwen3.prompt": {
+        "type": "string",
+        "description": "Optional Qwen3 ASR context/prompt",
+    },
+    "stt.mistral.model": {
+        "type": "select",
+        "description": "Mistral Voxtral transcription model",
+        "options": ["voxtral-mini-latest", "voxtral-mini-2602"],
     },
     "display.skin": {
         "type": "select",
